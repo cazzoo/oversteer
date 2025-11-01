@@ -54,7 +54,25 @@ class Device:
         return self.seat_id
 
     def device_file(self, filename):
-        return os.path.join(self.dev_path, filename)
+        # Try to locate the attribute by walking up from the current dev_path.
+        # Some distros expose the sysfs attributes (e.g. 'range', 'gain') a few
+        # levels above the input event node. This makes path resolution robust.
+        base = self.dev_path
+        if base:
+            current = base
+            for _ in range(6):
+                candidate = os.path.join(current, filename)
+                if os.path.exists(candidate):
+                    logging.debug("file path: %s", candidate)
+                    return candidate
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+        # Fallback to the direct join if nothing was found
+        file_path = os.path.join(self.dev_path if self.dev_path else '', filename)
+        logging.debug("file path: %s", file_path)
+        return file_path
 
     def checked_device_file(self, filename):
         path = self.device_file(filename)
@@ -73,7 +91,7 @@ class Device:
         return False
 
     def get_max_range(self):
-        return self.max_range
+        return getattr(self, 'max_range', None)
 
     def list_modes(self):
         path = self.checked_device_file("alternate_modes")
@@ -148,7 +166,6 @@ class Device:
         if not path:
             return False
         wrange = str(wrange)
-        logging.debug("Setting range: %s", wrange)
         with open(path, "w") as file:
             file.write(wrange)
         return True
@@ -167,7 +184,6 @@ class Device:
         if not path:
             return False
         combine_pedals = str(combine_pedals)
-        logging.debug("Setting combined pedals: %s", combine_pedals)
         with open(path, "w") as file:
             file.write(combine_pedals)
         return True
@@ -183,7 +199,6 @@ class Device:
 
     def set_autocenter(self, autocenter):
         autocenter = str(int(autocenter))
-        logging.debug("Setting autocenter strength: %s", autocenter)
         path = self.checked_device_file("autocenter")
         if path:
             with open(path, "w") as file:
@@ -204,7 +219,6 @@ class Device:
 
     def set_ff_gain(self, gain):
         gain = str(int(gain))
-        logging.debug("Setting FF gain: %s", gain)
         path = self.checked_device_file("gain")
         if path:
             with open(path, "w") as file:
@@ -227,7 +241,6 @@ class Device:
         if not path:
             return False
         level = str(level)
-        logging.debug("Setting spring level: %s", level)
         with open(path, "w") as file:
             file.write(level)
         return True
@@ -246,7 +259,6 @@ class Device:
         if not path:
             return False
         level = str(level)
-        logging.debug("Setting damper level: %s", level)
         with open(path, "w") as file:
             file.write(level)
         return True
@@ -265,7 +277,6 @@ class Device:
         if not path:
             return False
         level = str(level)
-        logging.debug("Setting friction level: %s", level)
         with open(path, "w") as file:
             file.write(level)
         return True
@@ -284,7 +295,6 @@ class Device:
         if not path:
             return False
         ffb_leds = str(ffb_leds)
-        logging.debug("Setting FF leds: %s", ffb_leds)
         with open(path, "w") as file:
             file.write(ffb_leds)
         return True
@@ -303,7 +313,6 @@ class Device:
         if not path:
             return False
         peak_ffb_level = str(peak_ffb_level)
-        logging.debug("Setting peak FF level: %s", peak_ffb_level)
         with open(path, "w") as file:
             file.write(peak_ffb_level)
         return True
@@ -365,7 +374,24 @@ class Device:
                     event.value = event.value * 64
                 elif self.usb_id not in [self.device_manager.LG_G29, self.device_manager.TM_T300RS, self.device_manager.TM_T500RS] and self.vendor_id != self.device_manager.VENDOR_FANATEC:
                     event.value = event.value * 4
-            elif self.usb_id in [self.device_manager.LG_G25, self.device_manager.LG_G27, self.device_manager.LG_G29, self.device_manager.TM_T300RS, self.device_manager.TM_T500RS]:
+            elif self.usb_id == self.device_manager.TM_T500RS:
+                # T500RS pedal remapping
+                # NOTE: The T500RS has a "mode" switch on the wheel that changes the pedal mapping.
+                # This remapping is configured for one specific mode position.
+                # If you switch the mode and pedals become swapped, the hardware will send
+                # different axis codes and this remapping may need to be adjusted.
+                #
+                # Current mode mapping:
+                # Hardware sends: Throttle=ABS_RZ(5), Brake=ABS_Y(1), Clutch=ABS_THROTTLE(6)
+                # GUI expects: ABS_Y(1)=Accelerator, ABS_Z(2)=Brakes, ABS_RZ(5)=Clutch
+                # Remapping:
+                if event.code == ecodes.ABS_RZ:
+                    event.code = ecodes.ABS_Y   # Throttle HW(5) → Accelerator display(1)
+                elif event.code == ecodes.ABS_Y:
+                    event.code = ecodes.ABS_Z   # Brake HW(1) → Brakes display(2)
+                elif event.code == ecodes.ABS_THROTTLE:
+                    event.code = ecodes.ABS_RZ  # Clutch HW(6) → Clutch display(5)
+            elif self.usb_id in [self.device_manager.LG_G25, self.device_manager.LG_G27, self.device_manager.LG_G29, self.device_manager.TM_T300RS]:
                 if event.code == ecodes.ABS_Y:
                     event.code = ecodes.ABS_RZ
                 elif event.code == ecodes.ABS_Z:
@@ -382,3 +408,5 @@ class Device:
                 elif event.code == ecodes.ABS_Z:
                     event.code = ecodes.ABS_Y
         return event
+
+

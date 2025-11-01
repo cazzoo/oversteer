@@ -2,6 +2,7 @@ import logging
 import os
 import pyudev
 from .device import Device
+from .t500rs import T500RS
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -73,9 +74,10 @@ class DeviceManager:
         usb_id = str(udevice.get('ID_VENDOR_ID')) + ':' + str(udevice.get('ID_MODEL_ID'))
         if usb_id not in self.supported_wheels:
             return
-        seat_id = udevice.get('ID_FOR_SEAT')
+        # Fallback seat identifier if ID_FOR_SEAT is missing
+        seat_id = udevice.get('ID_FOR_SEAT') or udevice.get('DEVPATH') or udevice.sys_path
         logging.debug("%s: %s", action, seat_id)
-        if seat_id is None:
+        if not seat_id:
             return
         if action == 'add':
             self.update_device_list(udevice)
@@ -89,7 +91,11 @@ class DeviceManager:
 
     def init_device_list(self):
         context = pyudev.Context()
-        for udevice in context.list_devices(subsystem='input', ID_INPUT_JOYSTICK=1):
+        # Prefer joystick-classified input devices, but fall back to all input devices
+        devices = list(context.list_devices(subsystem='input', ID_INPUT_JOYSTICK=1))
+        if not devices:
+            devices = list(context.list_devices(subsystem='input'))
+        for udevice in devices:
             usb_id = str(udevice.get('ID_VENDOR_ID')) + ':' + str(udevice.get('ID_MODEL_ID'))
             if usb_id in self.supported_wheels:
                 self.update_device_list(udevice)
@@ -97,32 +103,48 @@ class DeviceManager:
         logging.debug('Devices: %s', self.devices)
 
     def update_device_list(self, udevice):
-        seat_id = udevice.get('ID_FOR_SEAT')
+        # Prefer ID_FOR_SEAT but fall back to DEVPATH or sys_path when missing
+        seat_id = udevice.get('ID_FOR_SEAT') or udevice.get('DEVPATH') or udevice.sys_path
         logging.debug("update_device_list: %s", seat_id)
-        if seat_id is None:
+        if not seat_id:
             return
 
         if seat_id not in self.devices:
-            self.devices[seat_id] = Device(self, {
-                'seat_id': seat_id,
-            })
+            usb_id = str(udevice.get('ID_VENDOR_ID')) + ':' + str(udevice.get('ID_MODEL_ID'))
+            if usb_id == self.TM_T500RS:
+                self.devices[seat_id] = T500RS(self, {
+                    'seat_id': seat_id,
+                })
+            else:
+                self.devices[seat_id] = Device(self, {
+                    'seat_id': seat_id,
+                })
 
         device = self.devices[seat_id]
 
-        if 'DEVNAME' in udevice:
-            if 'event' in udevice.get('DEVNAME'):
-                usb_id = str(udevice.get('ID_VENDOR_ID')) + ':' + str(udevice.get('ID_MODEL_ID'))
-                device.set({
-                    'vendor_id': udevice.get('ID_VENDOR_ID'),
-                    'product_id': udevice.get('ID_MODEL_ID'),
-                    'usb_id': usb_id,
-                    'dev_name': udevice.get('DEVNAME'),
-                    'max_range': self.supported_wheels[usb_id],
-                })
-        else:
+        # Always set dev_path from the udev sysfs device link
+        try:
+            dev_path = os.path.realpath(os.path.join(udevice.sys_path, 'device'))
+            device.set({'dev_path': dev_path})
+        except Exception:
+            pass
+
+        # Set a human-friendly name when available
+        if 'NAME' in udevice and udevice.get('NAME'):
+            try:
+                device.set({'name': udevice.get('NAME').strip('"')})
+            except Exception:
+                pass
+
+        # If we have an event device, capture input node and USB identifiers
+        if 'DEVNAME' in udevice and 'event' in udevice.get('DEVNAME'):
+            usb_id = str(udevice.get('ID_VENDOR_ID')) + ':' + str(udevice.get('ID_MODEL_ID'))
             device.set({
-                'dev_path': os.path.join(udevice.sys_path, 'device'),
-                'name': udevice.get('NAME').strip('"'),
+                'vendor_id': udevice.get('ID_VENDOR_ID'),
+                'product_id': udevice.get('ID_MODEL_ID'),
+                'usb_id': usb_id,
+                'dev_name': udevice.get('DEVNAME'),
+                'max_range': self.supported_wheels.get(usb_id, device.get_max_range() if hasattr(device, 'get_max_range') else None),
             })
 
     def first_device(self):

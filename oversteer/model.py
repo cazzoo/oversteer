@@ -60,18 +60,22 @@ class Model:
                 self.ui.enable_save_profile()
 
     def read_device_settings(self):
+        ff_gain = self.device.get_ff_gain()
+        autocenter = self.device.get_autocenter()
+        peak_ffb_level = self.device.get_peak_ffb_level()
+
         return {
             'mode': self.device.get_mode(),
             'range': self.device.get_range(),
-            'ff_gain': self.device.get_ff_gain() * 100 / 65535,
-            'autocenter': self.device.get_autocenter() * 100 * 65535,
+            'ff_gain': ff_gain * 100 / 65535 if ff_gain is not None else None,
+            'autocenter': autocenter * 100 * 65535 if autocenter is not None else None,
             'combine_pedals': self.device.get_combine_pedals(),
             'spring_level': self.device.get_spring_level(),
             'damper_level': self.device.get_damper_level(),
             'friction_level': self.device.get_friction_level(),
             'ffb_leds': self.device.get_ffb_leds(),
-            'ffb_overlay': False if self.device.get_peak_ffb_level() is not None else None,
-            'range_overlay': 'never' if self.device.get_peak_ffb_level() is not None else None,
+            'ffb_overlay': False if peak_ffb_level is not None else None,
+            'range_overlay': 'never' if peak_ffb_level is not None else None,
             'use_buttons': False if self.device.get_range() is not None else None,
             'center_wheel': False,
             'start_app_manually': False,
@@ -217,6 +221,7 @@ class Model:
 
     def get_friction_level(self):
         return self.data['friction_level']
+
 
     def set_ffb_leds(self, value):
         value = bool(value)
