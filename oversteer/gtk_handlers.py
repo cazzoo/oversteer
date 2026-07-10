@@ -302,11 +302,13 @@ class GtkHandlers:
     # --- Auto-switch handlers ---
 
     def on_auto_switch_state_set(self, widget, state):
-        """Toggle the profile auto-switcher on/off."""
+        """Toggle the profile auto-switcher and persist the user's choice."""
         if state:
             self.controller.start_auto_switch()
         else:
             self.controller.stop_auto_switch()
+        self.controller.auto_switch_enabled = state
+        self.controller.save_preferences()
 
     def on_game_processes_changed(self, widget):
         """Update the game_processes model field when the entry changes."""

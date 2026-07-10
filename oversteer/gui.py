@@ -55,6 +55,7 @@ class Gui:
         self.app = application
         self.locale = ""
         self.check_permissions = True
+        self.auto_switch_enabled = False
         self.model = model
         self.device_manager = self.app.device_manager
         self.device = None
@@ -372,7 +373,7 @@ class Gui:
     # --- Auto-switch integration ---
 
     def start_auto_switch(self):
-        """Start the profile auto-switcher background thread."""
+        """Start the profile auto-switcher background thread (runtime only)."""
         if self.auto_switcher is not None and self.auto_switcher.is_running():
             return
         self.auto_switcher = ProfileAutoSwitcher(
@@ -384,17 +385,14 @@ class Gui:
             ),
         )
         self.auto_switcher.start()
-        self.auto_switch_enabled = True
-        self.save_preferences()
         logging.info("Auto-switch started from GUI")
 
     def stop_auto_switch(self):
-        """Stop the profile auto-switcher."""
+        """Stop the profile auto-switcher (runtime only; the saved preference
+        is preserved so the toggle survives restarts)."""
         if self.auto_switcher is not None:
             self.auto_switcher.stop()
         self.auto_switcher = None
-        self.auto_switch_enabled = False
-        self.save_preferences()
         logging.info("Auto-switch stopped")
 
     def _on_auto_profile_change(self, profile_name):
