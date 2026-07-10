@@ -2,6 +2,7 @@ import logging
 import os
 import pyudev
 import time
+from threading import Thread
 from .device import Device
 from . import wheel_ids as wid
 
@@ -69,31 +70,40 @@ class DeviceManager:
         self.observer.stop()
 
     def register_event(self, action, udevice):
-        id = udevice.device_path
+        id = udevice.device_path if udevice is not None else None
         if id is None:
             return
         logging.debug("Udev event %s: %s", action, id)
-        if action == "add":
-            self.update_device_list(udevice)
-            device = self.get_device(id)
-            if device:
-                time.sleep(5)
-                device.enable()
-                self.changed = True
-                if self.callback:
-                    self.callback()
-        if action == "remove":
-            device = self.get_device(id)
-            if device:
-                device.disable()
-                self.changed = True
-                if self.callback:
-                    self.callback()
-        if action == "remove":
-            device = self.get_device(id)
-            if device:
-                device.disable()
-                self.changed = True
+        try:
+            if action == "remove":
+                device = self.get_device(id)
+                if device:
+                    device.disable()
+                    self.changed = True
+                    if self.callback:
+                        self.callback()
+            elif action in ("add", "change"):
+                self.update_device_list(udevice)
+                device = self.get_device(id)
+                if device:
+                    # Re-enable off the observer thread: the driver needs time
+                    # to expose sysfs files, but blocking here stalls all events.
+                    Thread(
+                        target=self._enable_device, args=(device,), daemon=True
+                    ).start()
+        except Exception:
+            logging.exception("Error handling udev event %s: %s", action, id)
+
+    def _enable_device(self, device):
+        time.sleep(5)
+        try:
+            device.enable()
+        except Exception:
+            logging.exception("Error enabling device")
+        finally:
+            self.changed = True
+            if self.callback:
+                self.callback()
 
     def init_device_list(self):
         context = pyudev.Context()
@@ -138,9 +148,11 @@ class DeviceManager:
                     os.path.join(udevice.sys_path, "device", "device")
                 ),
                 "name": bytes(
-                    udevice.get("ID_VENDOR_ENC") + " " + udevice.get("ID_MODEL_ENC"),
+                    (udevice.get("ID_VENDOR_ENC") or "")
+                    + " "
+                    + (udevice.get("ID_MODEL_ENC") or ""),
                     "utf-8",
-                ).decode("unicode_escape"),
+                ).decode("unicode_escape").strip(),
                 "max_range": self.supported_wheels[usb_id],
             }
         )
