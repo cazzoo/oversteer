@@ -20,6 +20,7 @@ class GtkHandlers:
         return str(round(value * 10))
 
     def on_main_window_destroy(self, *args):
+        self.controller.stop_input_thread()
         self.controller.stop_auto_switch()
         self.ui.quit()
 

@@ -11,7 +11,7 @@ import shutil
 import signal
 import subprocess
 import sys
-from threading import Thread
+from threading import Thread, Event
 import time
 from xdg.BaseDirectory import save_config_path
 from .gtk_ui import GtkUi
@@ -68,6 +68,8 @@ class Gui:
         self.button_config[0] = [-1]
         self.pressed_button_count = 0
         self.auto_switcher = None
+        self._input_stop = Event()
+        self._input_thread = None
 
         signal.signal(signal.SIGINT, self.sig_int_handler)
 
@@ -88,6 +90,7 @@ class Gui:
 
         self.device_manager.start(self.device_changed)
         self.populate_window()
+        self._start_input_thread()
 
         self.ui.start()
 
@@ -107,6 +110,7 @@ class Gui:
         self.ui.main()
 
     def sig_int_handler(self, signal, frame):
+        self.stop_input_thread()
         self.stop_auto_switch()
         self.ui.quit()
 
@@ -298,6 +302,67 @@ class Gui:
         config_path = os.path.join(self.config_path, "buttons.ini")
         with open(config_path, "w") as f:
             config.write(f)
+
+    # --- Input monitoring ---
+
+    def _start_input_thread(self):
+        self._input_stop = Event()
+        self._input_thread = Thread(target=self.input_loop, daemon=True)
+        self._input_thread.start()
+        logging.info("Input monitor started")
+
+    def stop_input_thread(self):
+        self._input_stop.set()
+
+    def input_loop(self):
+        while not self._input_stop.is_set():
+            device = self.device
+            if device is None or not device.is_ready():
+                time.sleep(0.2)
+                continue
+            try:
+                for event in device.read_events(0.5):
+                    if self._input_stop.is_set():
+                        break
+                    self.process_event(event)
+            except OSError:
+                time.sleep(0.5)
+            except Exception:
+                logging.exception("Error reading input events")
+                time.sleep(0.5)
+
+    def process_event(self, event):
+        if event.type == ecodes.EV_ABS:
+            if event.code == ecodes.ABS_X:
+                self.ui.safe_call(self.ui.set_steering_input, event.value)
+            elif event.code == ecodes.ABS_Z:
+                self.ui.safe_call(self.ui.set_accelerator_input, event.value)
+            elif event.code == ecodes.ABS_RZ:
+                self.ui.safe_call(self.ui.set_brakes_input, event.value)
+            elif event.code == ecodes.ABS_Y:
+                self.ui.safe_call(self.ui.set_clutch_input, event.value)
+            elif event.code == ecodes.ABS_HAT0X:
+                self.ui.safe_call(self.ui.set_hatx_input, event.value)
+            elif event.code == ecodes.ABS_HAT0Y:
+                self.ui.safe_call(self.ui.set_haty_input, event.value)
+        elif event.type == ecodes.EV_KEY:
+            button = self.key_code_to_index(event.code)
+            if button is None:
+                return
+            delay = 0 if event.value else 100
+            self.ui.safe_call(self.ui.set_btn_input, button, event.value, delay)
+            if event.value == 1:
+                self.button_pressed(button)
+
+    @staticmethod
+    def key_code_to_index(code):
+        # evdev BTN_JOY (0x120) .. BTN_DEAD (0x12f) -> 0..15
+        if 288 <= code <= 303:
+            return code - 288
+        # evdev BTN_DPAD_* (0x2c0..) -> 16..24
+        if 704 <= code <= 712:
+            return code - 688
+        return None
 
     def start_app(self):
         args = self.app.args
